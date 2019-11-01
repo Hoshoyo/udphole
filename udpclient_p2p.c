@@ -25,6 +25,53 @@ void print_port(unsigned short port) {
     printf("%d", (port >> 8) | ((port & 0xff) << 8));
 }
 
+typedef enum {
+    CONN_NONE = 0,
+    CONN_SYN,
+    CONN_SYN_ACK,
+    CONN_ACK,
+} Connection_State;
+
+int perform_handshake(int sockfd, struct sockaddr_in* cinfo) {
+    char buffer[1024] = {0};
+    int len = sizeof(struct sockaddr);
+
+    Connection_State conn_state = CONN_NONE;
+
+    // Try to exchange data using that information
+    ssize_t sent = sendto(sockfd, "SYN", sizeof("SYN"), MSG_DONTWAIT, (struct sockaddr*)cinfo, len);
+    printf("Sento to peer %ld bytes (SYN)\n", sent);
+
+    while(1) {
+        int n = recvfrom(sockfd, (char *)buffer, 1024, MSG_WAITALL, (struct sockaddr *)cinfo, &len);
+        if(n > 0) {
+            printf("Received from peer message: %s at state %d\n", buffer, conn_state);
+
+            if(strcmp("SYN", buffer) == 0 && conn_state == CONN_NONE) {
+                conn_state = CONN_SYN;
+                // received a SYN message
+                ssize_t sent = sendto(sockfd, "SYN ACK", sizeof("SYN ACK"), MSG_DONTWAIT, (struct sockaddr*)cinfo, len);
+                printf("Sento to peer %ld bytes (SYN ACK)\n", sent);
+            } else if(strcmp("SYN ACK", buffer) == 0) {
+                conn_state = CONN_SYN_ACK;
+                // received a SYN ACK message
+                ssize_t sent = sendto(sockfd, "ACK", sizeof("ACK"), MSG_DONTWAIT, (struct sockaddr*)cinfo, len);
+                printf("Sento to peer %ld bytes (ACK)\n", sent);
+                break;
+            } else if (strcmp("ACK", buffer) == 0) {
+                conn_state = CONN_ACK;
+                break;
+            }
+
+        } else {
+            printf("Error receiving data from peer: %s\n", strerror(errno));
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if(argc < 2) {
         printf("usage: %s <server ip>\n", argv[0]);
@@ -48,7 +95,7 @@ int main(int argc, char** argv) {
     char hello[1024] = "Hello World";
     int n, len; 
     sendto(sockfd, (const char *)hello, strlen(hello), 
-        MSG_CONFIRM, (const struct sockaddr *) &servaddr,  
+        MSG_DONTWAIT, (const struct sockaddr *) &servaddr,  
         sizeof(servaddr)); 
     printf("Hello message sent.\n"); 
 
@@ -66,11 +113,10 @@ int main(int argc, char** argv) {
         print_port(cinfo->sin_port);
         printf("\n");       
 
-        // Try to exchange data using that information
-        ssize_t sent = sendto(sockfd, "Hello World!", sizeof("Hello World!"), MSG_DONTWAIT, (struct sockaddr*)cinfo, len);
-        printf("Sento to the other client %ld bytes\n", sent);
-
+        perform_handshake(sockfd, cinfo);
+        
         // Listen
+        printf("Waiting for data...\n");
         while(1) {
             char buffer[1024] = {0};
             int n = recvfrom(sockfd, (char *)buffer, 1024,
